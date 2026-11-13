@@ -1,1 +1,1 @@
-{ "expo": { "name": "prevent-remove-check", "slug": "prevent-remove-check" } }
+{ "expo": { "name": "prevent-remove-check", "slug": "prevent-remove-check", "scheme": "prc", "web": { "bundler": "metro", "output": "single" } } }
