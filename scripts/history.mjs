@@ -22,6 +22,7 @@ async function snapshot(page, cdp, label, shot) {
   console.log(`  ${label.padEnd(24)} ${JSON.stringify({ path, blocked, history, index })}`);
   if (shot) await page.screenshot({ path: `media/${shot}.png` });
 }
+
 async function scenario(name, link, leave, shot) {
   console.log(`${name}:`);
   const page = await browser.newPage();
@@ -37,3 +38,12 @@ async function scenario(name, link, leave, shot) {
   await snapshot(page, cdp, 'after browser Forward', shot && `${shot}-3-forward`);
   await page.close();
 }
+
+const browserBack = (page) => page.goBack({ waitUntil: 'load' }).catch(() => {});
+const routerBack = (page) => page.click('[data-testid="back"]');
+
+await scenario('browser Back, usePreventRemove + repeat()', 'open', browserBack, 'browser-back');
+await scenario('router.back(), usePreventRemove + repeat() (control)', 'open', routerBack, 'router-back');
+await scenario('browser Back, preventRemove set to false before repeat()', 'open2', browserBack);
+await scenario('browser Back, page without the hook (control)', 'open-plain', browserBack);
+await browser.close();
