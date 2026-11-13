@@ -1,0 +1,417 @@
+From 3b2d8272d558b19ad593db4fe6a7ee983840240d Mon Sep 17 00:00:00 2001
+From: "K.Dileepa Thushan Peiris" <dileepapeiris5@gmail.com>
+Date: Sat, 14 Nov 2026 02:20:43 +0530
+Subject: [PATCH 1/5] [router] Replay a prevented browser restore as a move to
+ its tracked entry
+
+---
+ .../src/global-state/browserHistory.ts        | 66 ++++++++++++++++---
+ 1 file changed, 57 insertions(+), 9 deletions(-)
+
+diff --git a/packages/expo-router/src/global-state/browserHistory.ts b/packages/expo-router/src/global-state/browserHistory.ts
+index 6c39d4000f0..1e3e64806be 100644
+--- a/packages/expo-router/src/global-state/browserHistory.ts
++++ b/packages/expo-router/src/global-state/browserHistory.ts
+@@ -1,4 +1,8 @@
+-import type { NavigationState, RouterBrowserHistoryAction } from '../react-navigation/routers';
++import type {
++  NavigationAction,
++  NavigationState,
++  RouterBrowserHistoryAction,
++} from '../react-navigation/routers';
+ import { ROOT_CHAIN } from '../react-navigation/routers/stateKeys';
+ import type {
+   BrowserHistory,
+@@ -18,6 +22,11 @@ import { getRootStackRouteNames } from './utils';
+ type Reduce<Result> = (result: Result, intent: ReducibleIntent) => Result;
+ type PopAction = Extract<RouterBrowserHistoryAction, { type: 'pop' }>;
+ type PopTarget = NonNullable<PopAction['target']>;
++/**
++ * The `RESET` that restores a tracked entry carries that entry's ID. When a screen prevents the
++ * restore, `usePreventRemove` hands this action to its callback and `repeat()` dispatches it again.
++ */
++type RestoreAction = NavigationAction & { browserHistoryEntryId: string };
+ 
+ // These functions calculate history state and commands. The adapter runs the commands after commit.
+ 
+@@ -114,8 +123,9 @@ function selectAndUpdateHistoryEntry(
+   const updatedHistory = updateHistoryEntry(history, index, state, path);
+   const events: BrowserHistoryEvent[] = [];
+   if (index !== history.index) {
+-    // A router pop selected an earlier entry. Move the browser there before updating its URL;
+-    // replacing the current entry alone would leave the browser's Back/Forward position unchanged.
++    // A router pop or a replayed restore selected another entry. Move the browser there before
++    // updating its URL; replacing the current entry alone would leave the browser's Back/Forward
++    // position unchanged.
+     events.push({ type: 'browser-history', op: 'go', delta: index - history.index });
+   }
+   events.push(createReplaceEvent(updatedHistory.entries[index]!.id, path));
+@@ -180,7 +190,7 @@ function restoreTrackedEntry<Result extends { state: NavigationState }>(
+   const trackedIndex = history.entries.indexOf(trackedEntry);
+   const reduced =
+     trackedEntry.path === change.path
+-      ? reduce(result, createResetIntent(trackedEntry.state))
++      ? reduce(result, createResetIntent(trackedEntry.state, trackedEntry.id))
+       : navigateToBrowserPath(history, trackedEntry.path, result, change.path, config, reduce);
+   if (reduced.state === result.state) {
+     // The restore was prevented, so move the browser back to the entry that matches the UI.
+@@ -201,11 +211,49 @@ function restoreTrackedEntry<Result extends { state: NavigationState }>(
+   };
+ }
+ 
+-function createResetIntent(state: NavigationState): ReducibleIntent {
+-  return {
+-    type: 'ACTION',
+-    payload: { action: { type: 'RESET', payload: state, target: state.key } },
+-  };
++function createResetIntent(state: NavigationState, restoredEntryId?: string): ReducibleIntent {
++  const action: NavigationAction | RestoreAction =
++    restoredEntryId === undefined
++      ? { type: 'RESET', payload: state, target: state.key }
++      : {
++          type: 'RESET',
++          payload: state,
++          target: state.key,
++          browserHistoryEntryId: restoredEntryId,
++        };
++  return { type: 'ACTION', payload: { action } };
++}
++
++function isRestoreAction(action: NavigationAction): action is RestoreAction {
++  return (
++    action.type === 'RESET' &&
++    typeof (action as Partial<RestoreAction>).browserHistoryEntryId === 'string'
++  );
++}
++
++/**
++ * Projects a replayed restore, for example `repeat()` from `usePreventRemove` after a prevented
++ * browser Back. The prevented restore moved the browser back to the entry that matched the UI, so
++ * the replay moves it to the restored entry again instead of replacing the current one. The
++ * `RESET` targets the root navigator, whose router reports no traversal when only a nested
++ * navigator's index changes. Returns `undefined` for other actions and for a restored entry that
++ * navigating after the prevented restore has discarded.
++ */
++export function applyReplayedRestore(
++  history: BrowserHistory,
++  nextState: NavigationState,
++  config: BrowserHistoryConfig,
++  action: NavigationAction
++): BrowserHistoryProjection | undefined {
++  if (!isRestoreAction(action)) {
++    return undefined;
++  }
++  const index = history.entries.findIndex((entry) => entry.id === action.browserHistoryEntryId);
++  if (index === -1) {
++    return undefined;
++  }
++  const path = getPathForState(nextState, config.linking);
++  return selectAndUpdateHistoryEntry(history, index, nextState, path);
+ }
+ 
+ /** Navigates to a browser URL, preserving route state for hash-only changes. */
+-- 
+2.54.0 (Apple Git-157)
+
+
+From 931c99d52c3a230c3a26377e592a33ff932a256e Mon Sep 17 00:00:00 2001
+From: "K.Dileepa Thushan Peiris" <dileepapeiris5@gmail.com>
+Date: Sat, 14 Nov 2026 02:20:43 +0530
+Subject: [PATCH 2/5] [router] Project a replayed browser restore before the
+ router's history instruction
+
+---
+ .../global-state/useNavigationTreeReducer.ts  | 28 +++++++++++++++----
+ 1 file changed, 22 insertions(+), 6 deletions(-)
+
+diff --git a/packages/expo-router/src/global-state/useNavigationTreeReducer.ts b/packages/expo-router/src/global-state/useNavigationTreeReducer.ts
+index f7355abe0e8..9023738270e 100644
+--- a/packages/expo-router/src/global-state/useNavigationTreeReducer.ts
++++ b/packages/expo-router/src/global-state/useNavigationTreeReducer.ts
+@@ -17,12 +17,17 @@ import type {
+ import { getChainFromStateKey } from '../react-navigation/routers/stateKeys';
+ import useLatestCallback from '../utils/useLatestCallback';
+ import {
++  applyReplayedRestore,
+   applyRouterHistoryAction,
+   createBrowserHistory,
+   restoreNavigationFromBrowser,
+   updateCurrentHistoryEntry,
+ } from './browserHistory';
+-import type { BrowserHistory, BrowserHistoryEvent } from './browserHistory.types';
++import type {
++  BrowserHistory,
++  BrowserHistoryEvent,
++  BrowserHistoryProjection,
++} from './browserHistory.types';
+ import {
+   completeNavigationState,
+   createSeededNavigationState,
+@@ -251,11 +256,22 @@ function reduceOperation(
+   if (next.state === result.state || !next.history) {
+     return next;
+   }
+-  // Structural repairs are not navigations, so they never move the browser.
+-  const projected =
+-    operation.type === 'NAVIGATOR_UNMOUNTED' || operation.type === 'NAVIGATOR_CHANGED'
+-      ? updateCurrentHistoryEntry(next.history, next.state, config)
+-      : applyRouterHistoryAction(next.history, next.state, config, next.browserHistoryAction);
++  let projected: BrowserHistoryProjection | undefined;
++  if (operation.type === 'NAVIGATOR_UNMOUNTED' || operation.type === 'NAVIGATOR_CHANGED') {
++    // Structural repairs are not navigations, so they never move the browser.
++    projected = updateCurrentHistoryEntry(next.history, next.state, config);
++  } else {
++    // A replayed browser restore, e.g. `repeat()` from `usePreventRemove`, returns to its entry.
++    if (operation.type === 'ACTION') {
++      projected = applyReplayedRestore(next.history, next.state, config, operation.payload.action);
++    }
++    projected ??= applyRouterHistoryAction(
++      next.history,
++      next.state,
++      config,
++      next.browserHistoryAction
++    );
++  }
+   return appendReportEvents({ ...next, history: projected.history }, projected.events);
+ }
+ 
+-- 
+2.54.0 (Apple Git-157)
+
+
+From 8a9d81e731caecaf0f8be88b3ddeeb685db54a99 Mon Sep 17 00:00:00 2001
+From: "K.Dileepa Thushan Peiris" <dileepapeiris5@gmail.com>
+Date: Sat, 14 Nov 2026 02:20:43 +0530
+Subject: [PATCH 3/5] [router] Test the entry-tagged restore and its replay
+
+---
+ .../__tests__/browserHistory.test.web.tsx     | 64 ++++++++++++++++++-
+ 1 file changed, 61 insertions(+), 3 deletions(-)
+
+diff --git a/packages/expo-router/src/global-state/__tests__/browserHistory.test.web.tsx b/packages/expo-router/src/global-state/__tests__/browserHistory.test.web.tsx
+index 6ac8c4f3f78..5a4629a7964 100644
+--- a/packages/expo-router/src/global-state/__tests__/browserHistory.test.web.tsx
++++ b/packages/expo-router/src/global-state/__tests__/browserHistory.test.web.tsx
+@@ -3,6 +3,7 @@ import type { NavigationState } from '../../react-navigation/routers';
+ import { ROOT_CHAIN } from '../../react-navigation/routers/stateKeys';
+ import { getMockConfig } from '../../testing-library/mock-config';
+ import {
++  applyReplayedRestore,
+   applyRouterHistoryAction,
+   createBrowserHistory,
+   restoreNavigationFromBrowser,
+@@ -66,9 +67,17 @@ function history(states: NavigationState[], index = states.length - 1): BrowserH
+   };
+ }
+ 
+-const reset = (state: NavigationState): ReducibleIntent => ({
++// A restore of a tracked entry carries the entry ID so `usePreventRemove` can replay it.
++const reset = (state: NavigationState, restoredEntryId?: string): ReducibleIntent => ({
+   type: 'ACTION',
+-  payload: { action: { type: 'RESET', payload: state, target: state.key } },
++  payload: {
++    action: {
++      type: 'RESET',
++      payload: state,
++      target: state.key,
++      ...(restoredEntryId !== undefined && { browserHistoryEntryId: restoredEntryId }),
++    },
++  },
+ });
+ 
+ // Applies resets like the real reducer does: the payload becomes the state.
+@@ -215,7 +224,7 @@ describe('restore', () => {
+       reduceResets
+     );
+ 
+-    expect(reduceResets).toHaveBeenCalledWith({ state: second }, reset(first));
++    expect(reduceResets).toHaveBeenCalledWith({ state: second }, reset(first, 'p:0'));
+     expect(restored.result.state).toBe(first);
+     expect(restored.history).toEqual({
+       ...current,
+@@ -281,6 +290,55 @@ describe('restore', () => {
+     expect(restored).toEqual({ result, history: current, events: [] });
+   });
+ 
++  test('replays a prevented restore by moving the browser to the restored entry', () => {
++    const first = stack(['a']);
++    const second = stack(['a', 'b']);
++    const current = history([first, second]);
++    const result = { state: second };
++    const reduce = jest.fn(
++      (_result: { state: NavigationState }, _intent: ReducibleIntent) => result
++    );
++    restoreNavigationFromBrowser(current, result, { id: 'p:0', path: '/a' }, config, reduce);
++    const intent = reduce.mock.calls[0]![1] as Extract<ReducibleIntent, { type: 'ACTION' }>;
++
++    // `repeat()` dispatches the prevented action; the root router reports no traversal for it.
++    const replayed = applyReplayedRestore(current, first, config, intent.payload.action);
++
++    expect(replayed?.history?.index).toBe(0);
++    expect(replayed?.history?.entries[0]).toEqual({ id: 'p:0', path: '/a', state: first });
++    expect(replayed?.events).toEqual([
++      { type: 'browser-history', op: 'go', delta: -1 },
++      { type: 'browser-history', op: 'replace', entryId: 'p:0', path: '/a' },
++    ]);
++  });
++
++  test('leaves a replayed restore to the router when its entry is no longer tracked', () => {
++    const first = stack(['a']);
++    const second = stack(['a', 'b']);
++    const current = history([first, second]);
++    const action = {
++      type: 'RESET',
++      payload: first,
++      target: 'root',
++      browserHistoryEntryId: 'p:7',
++    };
++
++    expect(applyReplayedRestore(current, first, config, action)).toBeUndefined();
++  });
++
++  test('leaves a reset that is not a browser restore to the router', () => {
++    const first = stack(['a']);
++    const current = history([first, stack(['a', 'b'])]);
++
++    expect(
++      applyReplayedRestore(current, first, config, {
++        type: 'RESET',
++        payload: first,
++        target: 'root',
++      })
++    ).toBeUndefined();
++  });
++
+   test('keeps the tracked entries when a tracked entry has another browser path', () => {
+     const first = stack(['a']);
+     const second = stack(['a', 'b']);
+-- 
+2.54.0 (Apple Git-157)
+
+
+From 85ec299329c583c9320027900fb85015571f0d8d Mon Sep 17 00:00:00 2001
+From: "K.Dileepa Thushan Peiris" <dileepapeiris5@gmail.com>
+Date: Sat, 14 Nov 2026 02:20:44 +0530
+Subject: [PATCH 4/5] [router] Test replaying a prevented browser Back through
+ a root layout stack
+
+---
+ .../useNavigationTreeReducer.test.web.tsx     | 70 ++++++++++++++++++-
+ 1 file changed, 67 insertions(+), 3 deletions(-)
+
+diff --git a/packages/expo-router/src/global-state/__tests__/useNavigationTreeReducer.test.web.tsx b/packages/expo-router/src/global-state/__tests__/useNavigationTreeReducer.test.web.tsx
+index dc6446e62c4..c804b1b09e9 100644
+--- a/packages/expo-router/src/global-state/__tests__/useNavigationTreeReducer.test.web.tsx
++++ b/packages/expo-router/src/global-state/__tests__/useNavigationTreeReducer.test.web.tsx
+@@ -3,11 +3,12 @@ import * as React from 'react';
+ 
+ import { StackRouter as ExpoStackRouter } from '../../layouts/stack-router';
+ import {
+-  type NavigationState,
+-  type StackNavigationState,
+-  type ParamListBase,
++  type NavigationAction,
+   StackRouter,
+   TabRouter,
++  type NavigationState,
++  type ParamListBase,
++  type StackNavigationState,
+ } from '../../react-navigation/routers';
+ import type { RouterRegistry, RouterRegistryEntry } from '../routerRegistry';
+ import { useNavigationTreeReducer } from '../useNavigationTreeReducer';
+@@ -464,3 +465,66 @@ test('ignores a required screens sync for a route that is no longer focused', as
+ 
+   expect(result.result.current.state).toBe(state);
+ });
++
++test('replays a prevented browser restore as a move to the restored entry', async () => {
++  // Like an app whose root layout is a Stack: the root navigator holds one route with the stack.
++  const child = { ...initialState, key: 'child' };
++  const seed = {
++    ...initialState,
++    routeNames: ['layout'],
++    routes: [{ key: 'layout', name: 'layout', state: child }],
++  };
++  const nestedRegistry: RouterRegistry = new Map<string, RouterRegistryEntry>([
++    ['root', entry(StackRouter({}), ['layout'])],
++    ['child', entry(StackRouter({}), initialState.routeNames)],
++  ]);
++  const prevented = new Set<string>();
++  const result = await renderHook(() =>
++    useNavigationTreeReducer({
++      initialState: seed,
++      registry: nestedRegistry,
++      routesWithRemovalPrevented: prevented,
++    })
++  );
++  const initialEntryId = browserEvents(result)![0]!;
++  await act(() =>
++    result.result.current.handleAction({
++      type: 'PUSH',
++      target: 'child',
++      payload: { name: 'second' },
++    })
++  );
++  expect(browserEvents(result)?.at(-1)).toMatchObject({ op: 'push', path: '/layout' });
++  const childState = result.result.current.state.routes[0]!.state as NavigationState;
++  const secondKey = childState.routes[1]!.key;
++  prevented.add(secondKey);
++
++  // Browser Back to the first entry; `second` prevents its removal.
++  await act(() =>
++    result.result.current.processIntent({
++      type: 'BROWSER_HISTORY_CHANGED',
++      actionId: 0,
++      payload: { id: initialEntryId.op === 'go' ? null : initialEntryId.entryId, path: '/layout' },
++    })
++  );
++  const preventedEvent = result.result.current.report?.events.findLast(
++    (event) => event.type === 'prevented-routes'
++  );
++  expect(preventedEvent).toMatchObject({ routeKeys: [secondKey] });
++  expect(browserEvents(result)?.at(-1)).toEqual(expect.objectContaining({ op: 'go', delta: 1 }));
++
++  // `usePreventRemove`'s `repeat()` disables prevention and dispatches the prevented action as is.
++  prevented.delete(secondKey);
++  const eventsBefore = result.result.current.report!.events.length;
++  await act(() =>
++    result.result.current.handleAction((preventedEvent as { action: NavigationAction }).action)
++  );
++  expect(result.result.current.state.routes[0]!.state!.routes.map((route) => route.name)).toEqual([
++    'first',
++  ]);
++  const newEvents = result.result.current.report!.events.slice(eventsBefore);
++  expect(newEvents.filter((event) => event.type === 'browser-history')).toEqual([
++    expect.objectContaining({ op: 'go', delta: -1 }),
++    expect.objectContaining({ op: 'replace', path: '/layout' }),
++  ]);
++});
+-- 
+2.54.0 (Apple Git-157)
+
+
+From 38ad7db7276c9cffe5235bc965db171f1557a6e5 Mon Sep 17 00:00:00 2001
+From: "K.Dileepa Thushan Peiris" <dileepapeiris5@gmail.com>
+Date: Sat, 14 Nov 2026 02:20:44 +0530
+Subject: [PATCH 5/5] Changeset for the usePreventRemove browser Back replay
+ fix
+
+---
+ .changeset/expo-router-prevent-remove-browser-back-replay.md | 5 +++++
+ 1 file changed, 5 insertions(+)
+ create mode 100644 .changeset/expo-router-prevent-remove-browser-back-replay.md
+
+diff --git a/.changeset/expo-router-prevent-remove-browser-back-replay.md b/.changeset/expo-router-prevent-remove-browser-back-replay.md
+new file mode 100644
+index 00000000000..973dd549ac0
+--- /dev/null
++++ b/.changeset/expo-router-prevent-remove-browser-back-replay.md
+@@ -0,0 +1,5 @@
++---
++'expo-router': patch
++---
++
++[Web] Fix `repeat()` from `usePreventRemove` after a blocked browser Back replacing the current history entry instead of returning to the entry the user chose, which left Forward with nothing to open.
+-- 
+2.54.0 (Apple Git-157)
+
