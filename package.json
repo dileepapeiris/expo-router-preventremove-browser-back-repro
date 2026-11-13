@@ -1,0 +1,10 @@
+{
+  "name": "expo-router-preventremove-browser-back-repro",
+  "version": "1.0.0",
+  "private": true,
+  "main": "expo-router/entry",
+  "scripts": {
+    "web": "expo start --web --port 8099",
+    "trace": "node scripts/history.mjs http://localhost:8099"
+  }
+}
