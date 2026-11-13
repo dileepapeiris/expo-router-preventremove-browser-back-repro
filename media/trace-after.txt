@@ -1,0 +1,40 @@
+browser Back, usePreventRemove + repeat():
+  after Link             {"path":"/page","blocked":null,"history":["/","/page"],"index":1}
+         635ms pushState({"id":"VGLwaLGDPj-AZkgo-M5YJ:_r_0_:1"}, /page)  (url=/, history.length=2)
+  after leaving          {"path":"/","blocked":"RESET","history":["/","/page"],"index":0}
+        2910ms popstate state={"id":"VGLwaLGDPj-AZkgo-M5YJ:_r_0_:0"}  (url=/, history.length=3)
+        2912ms history.go(1)  (url=/, history.length=3)
+        2913ms popstate state={"id":"VGLwaLGDPj-AZkgo-M5YJ:_r_0_:1"}  (url=/page, history.length=3)
+        3033ms history.go(-1)  (url=/page, history.length=3)
+        3034ms popstate state={"id":"VGLwaLGDPj-AZkgo-M5YJ:_r_0_:0"}  (url=/, history.length=3)
+        3034ms replaceState({"id":"VGLwaLGDPj-AZkgo-M5YJ:_r_0_:0"}, /)  (url=/, history.length=3)
+  after browser Forward  {"path":"/page","blocked":"RESET","history":["/","/page"],"index":1}
+        3659ms popstate state={"id":"VGLwaLGDPj-AZkgo-M5YJ:_r_0_:1"}  (url=/page, history.length=3)
+router.back(), usePreventRemove + repeat() (control):
+  after Link             {"path":"/page","blocked":null,"history":["/","/page"],"index":1}
+         640ms pushState({"id":"UjUHuofGnSBRQTeVoXx49:_r_0_:1"}, /page)  (url=/, history.length=2)
+  after leaving          {"path":"/","blocked":"GO_BACK","history":["/","/page"],"index":0}
+        3073ms history.go(-1)  (url=/page, history.length=3)
+        3074ms popstate state={"id":"UjUHuofGnSBRQTeVoXx49:_r_0_:0"}  (url=/, history.length=3)
+        3074ms replaceState({"id":"UjUHuofGnSBRQTeVoXx49:_r_0_:0"}, /)  (url=/, history.length=3)
+  after browser Forward  {"path":"/page","blocked":"GO_BACK","history":["/","/page"],"index":1}
+        3702ms popstate state={"id":"UjUHuofGnSBRQTeVoXx49:_r_0_:1"}  (url=/page, history.length=3)
+browser Back, preventRemove set to false before repeat():
+  after Link             {"path":"/page2","blocked":null,"history":["/","/page2"],"index":1}
+         641ms pushState({"id":"vhdUQsD35Jj8QtyEXJYSQ:_r_0_:1"}, /page2)  (url=/, history.length=2)
+  after leaving          {"path":"/","blocked":"RESET","history":["/","/page2"],"index":0}
+        2854ms popstate state={"id":"vhdUQsD35Jj8QtyEXJYSQ:_r_0_:0"}  (url=/, history.length=3)
+        2871ms history.go(1)  (url=/, history.length=3)
+        2872ms popstate state={"id":"vhdUQsD35Jj8QtyEXJYSQ:_r_0_:1"}  (url=/page2, history.length=3)
+        2969ms history.go(-1)  (url=/page2, history.length=3)
+        2971ms popstate state={"id":"vhdUQsD35Jj8QtyEXJYSQ:_r_0_:0"}  (url=/, history.length=3)
+        2971ms replaceState({"id":"vhdUQsD35Jj8QtyEXJYSQ:_r_0_:0"}, /)  (url=/, history.length=3)
+  after browser Forward  {"path":"/page2","blocked":"RESET","history":["/","/page2"],"index":1}
+        3582ms popstate state={"id":"vhdUQsD35Jj8QtyEXJYSQ:_r_0_:1"}  (url=/page2, history.length=3)
+browser Back, page without the hook (control):
+  after Link             {"path":"/plain","blocked":null,"history":["/","/plain"],"index":1}
+         639ms pushState({"id":"aKkmn7A9HBhvE0O2K3qGl:_r_0_:1"}, /plain)  (url=/, history.length=2)
+  after leaving          {"path":"/","blocked":null,"history":["/","/plain"],"index":0}
+        2853ms popstate state={"id":"aKkmn7A9HBhvE0O2K3qGl:_r_0_:0"}  (url=/, history.length=3)
+  after browser Forward  {"path":"/plain","blocked":null,"history":["/","/plain"],"index":1}
+        3573ms popstate state={"id":"aKkmn7A9HBhvE0O2K3qGl:_r_0_:1"}  (url=/plain, history.length=3)
