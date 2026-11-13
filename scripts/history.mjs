@@ -22,3 +22,18 @@ async function snapshot(page, cdp, label, shot) {
   console.log(`  ${label.padEnd(24)} ${JSON.stringify({ path, blocked, history, index })}`);
   if (shot) await page.screenshot({ path: `media/${shot}.png` });
 }
+async function scenario(name, link, leave, shot) {
+  console.log(`${name}:`);
+  const page = await browser.newPage();
+  const cdp = await page.createCDPSession();
+  await page.goto(`${BASE}/`, { waitUntil: 'networkidle0', timeout: 120000 });
+  await page.waitForSelector(`[data-testid="${link}"]`, { timeout: 60000 });
+  await page.click(`[data-testid="${link}"]`);
+  await sleep(1500);
+  await snapshot(page, cdp, 'after Link', shot && `${shot}-1-page`);
+  await leave(page);
+  await snapshot(page, cdp, 'after leaving', shot && `${shot}-2-left`);
+  await page.goForward({ waitUntil: 'load' }).catch(() => {});
+  await snapshot(page, cdp, 'after browser Forward', shot && `${shot}-3-forward`);
+  await page.close();
+}
